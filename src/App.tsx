@@ -506,9 +506,9 @@ export default function App() {
   return (
     <div className="min-h-screen bg-black px-4 pb-16">
       {/* Header */}
-      <header className=\"sticky top-0 z-20 -mx-4 mb-4 border-b border-zinc-900 bg-black/85 px-4 py-3 backdrop-blur\">
+      <header className="sticky top-0 z-20 -mx-4 mb-4 border-b border-zinc-900 bg-black/85 px-4 py-3 backdrop-blur">
         {!user && (
-          <div className=\"mb-2 rounded-lg border border-amber-500/40 bg-amber-950/20 p-2 text-center font-mono text-[11px] text-amber-300\">
+          <div className="mb-2 rounded-lg border border-amber-500/40 bg-amber-950/20 p-2 text-center font-mono text-[11px] text-amber-300">
             Откройте приложение через кнопку в Telegram-боте, иначе админ-режим не сработает.
           </div>
         )}
