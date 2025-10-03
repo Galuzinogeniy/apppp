@@ -1,10 +1,10 @@
-// ESM-версия: telegram webhook
+// netlify/functions/telegram.mjs
 import { getStore } from '@netlify/blobs';
 
-const BOT_TOKEN   = process.env.BOT_TOKEN;
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID; // куда слать уведомления (опц.)
-const WEBAPP_URL  = process.env.WEBAPP_URL;      // https://<твой>.netlify.app
-const ADMIN_SECRET = process.env.ADMIN_SECRET;   // секрет для /admin <code>
+const BOT_TOKEN     = process.env.BOT_TOKEN;
+const WEBAPP_URL    = process.env.WEBAPP_URL;
+const ADMIN_SECRET  = process.env.ADMIN_SECRET || ""; // может быть пустым
+const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || ""; // опционально
 
 function escapeHtml(s = '') {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -21,18 +21,26 @@ async function tg(method, payload) {
   }
 }
 
-// Blobs-хранилище админов
 const store = getStore({ name: 'admins' });
-async function addAdmin(id)   { await store.set(String(id), '1'); }
-async function removeAdmin(id){ await store.delete(String(id)); }
+async function addAdmin(id)       { await store.set(String(id), '1'); }
+async function removeAdmin(id)    { await store.delete(String(id)); }
 
 export async function handler(event) {
+  // Telegram всегда шлёт POST, но если вдруг GET — не ругаемся
   if (event.httpMethod !== 'POST') return { statusCode: 200, body: 'OK' };
-  if (!BOT_TOKEN || !WEBAPP_URL || !ADMIN_SECRET) return { statusCode: 500, body: 'Missing env' };
+
+  // Для /start и приёма заявок хватит BOT_TOKEN и WEBAPP_URL
+  if (!BOT_TOKEN || !WEBAPP_URL) {
+    console.error('Missing BOT_TOKEN or WEBAPP_URL');
+    return { statusCode: 500, body: 'Missing env' };
+  }
 
   let update;
-  try { update = JSON.parse(event.body); } catch { return { statusCode: 200, body: 'no json' }; }
-  const msg = update.message;
+  try { update = JSON.parse(event.body); } catch {
+    return { statusCode: 200, body: 'no json' };
+  }
+
+  const msg    = update.message;
   const chatId = msg?.chat?.id;
   const from   = msg?.from;
 
@@ -50,14 +58,16 @@ export async function handler(event) {
       });
     }
 
-    // /admin <code> — выдаём права по секрету
+    // /admin <code> — выдаём права по секрету (требует ADMIN_SECRET)
     if (msg?.text?.startsWith('/admin')) {
       const parts = msg.text.trim().split(/\s+/);
-      const code = parts[1];
-      if (!code) {
+      const code  = parts[1];
+
+      if (!ADMIN_SECRET) {
+        await tg('sendMessage', { chat_id: chatId, text: 'Админ-секрет не настроен на сервере.' });
+      } else if (!code) {
         await tg('sendMessage', { chat_id: chatId, text: 'Укажите код: /admin <код>' });
       } else if (code === ADMIN_SECRET) {
-        // Сразу подтверждаем пользователю
         await tg('sendMessage', { chat_id: chatId, text: 'Код верный ✅ Включаю админ-режим…' });
         try {
           await addAdmin(chatId);
@@ -88,7 +98,7 @@ export async function handler(event) {
       }
     }
 
-    // Приём данных из WebApp
+    // Данные из WebApp (sendData)
     const wad = msg?.web_app_data;
     if (wad?.data) {
       let payload;
@@ -109,5 +119,7 @@ export async function handler(event) {
   } catch (e) {
     console.error('Handler error', e);
   }
+
+  // Всегда отвечаем 200, чтобы Telegram не ругался
   return { statusCode: 200, body: 'OK' };
 }
