@@ -1,5 +1,18 @@
-// netlify/functions/telegram.mjs
-import { getStore } from '@netlify/blobs';
+// ESM webhook для Telegram. Защищён от падений.
+// Работает даже если хранилище Blobs недоступно (просто не включает админа, но отвечает).
+
+let store = null;
+async function ensureStore() {
+  if (store) return store;
+  try {
+    const mod = await import('@netlify/blobs');
+    store = mod.getStore({ name: 'admins' });
+  } catch (e) {
+    console.error('Blobs unavailable:', e);
+    store = null; // не падаем, просто нет персист-хранилища
+  }
+  return store;
+}
 
 const BOT_TOKEN     = process.env.BOT_TOKEN;
 const WEBAPP_URL    = process.env.WEBAPP_URL;
@@ -10,34 +23,43 @@ function escapeHtml(s = '') {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 async function tg(method, payload) {
+  if (!BOT_TOKEN) return;
   const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    console.error('TG API error', method, res.status, t);
+  }).catch(e => ({ ok:false, statusText:String(e) }));
+  if (!res?.ok) {
+    let t = '';
+    try { t = await res.text(); } catch {}
+    console.error('TG API error', method, res?.status, t || res?.statusText);
   }
 }
 
-const store = getStore({ name: 'admins' });
-async function addAdmin(id)       { await store.set(String(id), '1'); }
-async function removeAdmin(id)    { await store.delete(String(id)); }
+async function addAdmin(chatId) {
+  const s = await ensureStore();
+  if (!s) throw new Error('blobs_unavailable');
+  await s.set(String(chatId), '1');
+}
+async function removeAdmin(chatId) {
+  const s = await ensureStore();
+  if (!s) throw new Error('blobs_unavailable');
+  await s.delete(String(chatId));
+}
 
 export async function handler(event) {
-  // Telegram всегда шлёт POST, но если вдруг GET — не ругаемся
+  // Telegram шлёт POST; на GET просто ответим ОК (для быстрой проверки в браузере)
   if (event.httpMethod !== 'POST') return { statusCode: 200, body: 'OK' };
 
-  // Для /start и приёма заявок хватит BOT_TOKEN и WEBAPP_URL
+  // Для /start и приёма заявок нужно хотя бы это:
   if (!BOT_TOKEN || !WEBAPP_URL) {
     console.error('Missing BOT_TOKEN or WEBAPP_URL');
-    return { statusCode: 500, body: 'Missing env' };
+    return { statusCode: 200, body: 'OK' }; // не 500, чтобы Telegram не ретраил бесконечно
   }
 
   let update;
   try { update = JSON.parse(event.body); } catch {
-    return { statusCode: 200, body: 'no json' };
+    return { statusCode: 200, body: 'OK' };
   }
 
   const msg    = update.message;
@@ -45,7 +67,7 @@ export async function handler(event) {
   const from   = msg?.from;
 
   try {
-    // /start — присылаем кнопку открытия WebApp
+    // /start — дать кнопку открытия WebApp
     if (msg?.text === '/start') {
       await tg('sendMessage', {
         chat_id: chatId,
@@ -58,7 +80,7 @@ export async function handler(event) {
       });
     }
 
-    // /admin <code> — выдаём права по секрету (требует ADMIN_SECRET)
+    // /admin <code> — включить админство по секрету (если секрет настроен)
     if (msg?.text?.startsWith('/admin')) {
       const parts = msg.text.trim().split(/\s+/);
       const code  = parts[1];
@@ -94,11 +116,11 @@ export async function handler(event) {
         await tg('sendMessage', { chat_id: chatId, text: 'Админ-режим отключён.' });
       } catch (e) {
         console.error('removeAdmin error', e);
-        await tg('sendMessage', { chat_id: chatId, text: 'Не удалось снять права.' });
+        await tg('sendMessage', { chat_id: chatId, text: 'Не удалось снять права (хранилище недоступно).' });
       }
     }
 
-    // Данные из WebApp (sendData)
+    // Данные из WebApp (Telegram.WebApp.sendData)
     const wad = msg?.web_app_data;
     if (wad?.data) {
       let payload;
@@ -120,6 +142,5 @@ export async function handler(event) {
     console.error('Handler error', e);
   }
 
-  // Всегда отвечаем 200, чтобы Telegram не ругался
   return { statusCode: 200, body: 'OK' };
 }
