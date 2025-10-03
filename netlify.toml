@@ -4,8 +4,5 @@
   publish = "dist"
   functions = "netlify/functions"
 
-# SPA-редирект для React Router (если решишь добавить)
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
+[functions]
+  node_bundler = "esbuild"
